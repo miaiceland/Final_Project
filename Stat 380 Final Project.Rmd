@@ -1,0 +1,623 @@
+---
+title: "Final Project"
+author: "Claire Burcik, Mia Iceland, and Hannah Park"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Front Matter
+```{r}
+remove(list = ls())
+library(tidyverse)
+library(rpart)
+library(rattle)
+library(glmnet)
+library(randomForest) 
+library(FNN)
+library(naivebayes)
+
+player1 <- read.csv("CODGames_p1_380.csv")
+
+player2 <- read.csv("CODGames_p2_380.csv")
+
+maps <- read.csv("CODMaps.csv")
+
+game_modes <- read.csv("CODGameModes.csv")
+```
+
+## Task 1
+
+To find out which maps are most likely to win the map vote when they are an option, I need to be able to calculate the proportion of maps that win when they are listed as Map1 or Map2 for both the player1 and player2 data sets. 
+
+### Wrangling
+
+To begin this process, I must do some wrangling to the player1 and player2 data frames. To start off, I will join the player1 and player2 data frames vertically using rbind in order to only have to work with one data set. For both player1 and player2, there are many cases with empty character strings ("") as entries for Map1, Map2, and MapVote. Since these cases don't list the maps as options, they will have to be filtered out. Next, there's a lot of spelling errors that need to be fixed. More specifically, many of the map names for Map1, Map2, and Choice are misspelled. Additionally, some of the map names have extra spaces that need to be removed. To fix these spelling errors, I plan to use agrepl() which evaluates approximate string matches. Since most of the spelling errors for the map names are only off from the correct name by 1 letter or so, agrepl() works well to evaluate which misspelled strings match with the correct map names. There may be a few instances where agrepl() may not match the misspelled string to its correct map name. In these few cases, I may need to use brute force to fix the spellings. By using a for loop to iterate through each row of the joined player1 and player2 data set, I can match the misspelled strings in Map1, Map2, and Choice to the correct map names from the map data set. Additionally, I will need to do some manipulating to the variable MapVote. There is a case where an entry was misspelled (" _ o _ " instead of  " _ to _ "), so I will have to resolve that issue. To do so, I plan to split the string by their spaces. This will result in a tuple of three elements and I'll have to check that the second element for each row is spelled "to" instead of "o". I will then have to re-concatenate the tuple of three strings into one character string. Finally, I will eventually need to evaluate the scores for mapVote and whether there was a tie or not. So, to make it easier to evaluate, I once again will split the string entries in mapVote by " to " in order to isolate the vote counts. Once I complete all of the wrangling, I can start my computations. 
+```{r}
+#Join player1 and player2 data sets vertically
+both_players<- rbind(player1, player2)
+
+#Remove cases where player didn't get to vote
+wrangled_both_players <- both_players %>%
+  select(Map1, Map2, Choice, MapVote)%>%
+  filter(MapVote != "")%>%
+  na.omit()
+
+#Fix spelling for Map1, Map2, and Choice
+for(i in 1:nrow(wrangled_both_players)){
+  if (!(wrangled_both_players[i, 1] %in% maps$Name)){
+    if(wrangled_both_players[i,1] == "Riad"){
+      wrangled_both_players[i,1] <- "Raid"}
+    else if (wrangled_both_players[i,1] == "Collateral"){
+      wrangled_both_players[i,1] <- "Collateral Strike"}
+    else{
+      for (j in 1:nrow(maps)){
+        #if Map1 val is similar to Name in Maps
+        if(agrepl(maps[j,1], wrangled_both_players[i,1]) == TRUE){
+          wrangled_both_players[i,1]<-maps[j,1]
+        }
+      }
+    }
+  }
+  if(!(wrangled_both_players[i,2] %in% maps$Name)){
+    if(wrangled_both_players[i,2] == "Riad"){
+      warngled_p1[i,2] <- "Raid"
+    }
+    else if (wrangled_both_players[i,2] == "Collateral"){
+      wrangled_both_players[i,2] <- "Collateral Strike"}
+    else{
+      for(k in 1:nrow(maps)){
+        #if Map2 val is similar to Name in Maps
+        if(agrepl(maps[k,1], wrangled_both_players[i,2]) == TRUE){
+          wrangled_both_players[i,2]<-maps[k,1]
+          }
+      }
+    }
+  }
+  if (!(wrangled_both_players[i,3] %in% maps$Name)){
+    if(wrangled_both_players[i,3] == " Riad"){
+      wrangled_both_players[i, 3] <- "Raid"
+    }
+    else if (wrangled_both_players[i,3] == "Collateral"){
+      wrangled_both_players[i,3] <- "Collateral Strike"
+    }
+    else if(wrangled_both_players[i,3] == "Deisel"){
+      wrangled_both_players[i,3] <- "Diesel"
+    }
+    else{for(z in 1:nrow(maps)){
+      #if Choice val is similar to Name in Maps
+      if(agrepl(maps[z,1], wrangled_both_players[i,3]) == TRUE){
+          wrangled_both_players[i,3]<-maps[z,1]
+          }
+      }
+    }
+  }
+}
+
+#Fix spelling for MapVote
+wrangled_both_players <-
+  wrangled_both_players%>%
+  #Split string into three 
+  mutate(MapVote2 = strsplit(MapVote, " "))
+
+for(i in 1:nrow(wrangled_both_players)){
+  if(wrangled_both_players$MapVote2[[i]][2] != "to"){
+    wrangled_both_players$MapVote2[[i]][2] <- "to"
+  }
+}
+
+#Concatenate split strings for MapVote
+vec<- rep(NA, nrow(wrangled_both_players))
+for (i in 1:nrow(wrangled_both_players)){
+  vec[i]<-paste(wrangled_both_players$MapVote2[[i]][1], wrangled_both_players$MapVote2[[i]][2], wrangled_both_players$MapVote2[[i]][3])
+}
+
+#Separate Votes, split string into two 
+wrangled_both_players <-
+  wrangled_both_players %>%
+  mutate(MapVote2 = strsplit(vec, " to "))
+```
+
+### Count the Number of Times a Map is an Option
+
+To start my calculations, I'll have to count the number of times a map is listed as an option for the joined player1 and player2 data set. To do this, I will leverage the summarize function. With this method, I can create new data frames that show the counts of each map for a given column of a data set. So, I will create two data frames, one that shows the counts for map1 and one that shows the counts for map2. Then, I can then use left_join() to have the counts for map1 and map2 in the same data frame. Since some maps may not appear as options for map1 or map2, there may be some NA entries. To resolve this I can iterate through each row the of the final joined data frame and covert any NA entries to 0's. Finally, to get the total count, I just have to add the 2 columns for the map1 counts and map2 counts. I noticed that the data frames resulting from the summarize function are in alphabetical order based on map name. Since the maps data frame is organized in chronological order by Date, I will have to reorder the maps data frame to match the order of the count data frame. Once the maps data set is re-ordered, the total count can then be added as a new column named Frequency.
+
+```{r}
+#Arrange maps in alphabetical order based on name variable
+maps<- maps%>%
+  arrange(Name)
+
+#Frequencies of maps appearing in Map1 
+map1_count<-wrangled_both_players%>%
+  group_by(Map1)%>%
+  summarize(map1Count= n())
+
+#Frequencies of maps appearing in Map2 
+map2_count<-wrangled_both_players%>%
+  group_by(Map2)%>%
+  summarize(map2Count=n())
+
+#Join dfs to get map frequencies 
+map_count<-left_join(map1_count, map2_count, by =c("Map1" = "Map2"))
+
+#replace NA's with 0
+for(i in 1:nrow(map_count)){
+  if(is.na(map_count[i,2])){
+    map_counts[i,2] <- 0
+  }
+  if(is.na(map_count[i,3])){
+    map_count[i,3] <- 0
+  }
+}
+
+#add all map frequencies together for each map
+frequencies<- rep(NA, nrow(maps))
+for(i in 1:nrow(maps)){
+  frequencies[i] <-map_count[i,2]+ map_count[i,3]
+}
+
+#create frequency variable in maps df
+maps<-maps%>%
+  mutate(Frequency = frequencies)
+```
+
+### Count the Number of Times a Map Wins a Vote 
+
+Next, I'll have to calculate the number of times a map won the vote. The most efficient way to do this is to filter out the cases that resulted in ties for MapVote. Because of the data type of the entries in the MapVote column (a list of string tuples) it's tricky to use filter(). So instead, I will have to create empty data frames that will just hold the cases that don't result in ties. I will have to use a for loop once again to iterate through each row of the wrangled joined players data set and each row that doesn't have the 1st element in the tuple for mapVote equaling the 2nd element will get added to the the no tie data frame. In order to get a count for the number of wins each map had, I can use the summarize function once again on the no tie data frame to get counts of each map for the Choice variable. The resulting win frequencies will then be added to the maps data frame in a new column called Wins.
+
+```{r}
+#Create df that excludes cases that ended in a tie
+no_ties<-data.frame(Map1 = character(), Map2 = character(), Choice = character(), MapVote = character(), MapVote2 = character() )
+
+for (i in 1:nrow(wrangled_both_players)){
+  if(wrangled_both_players$MapVote2[[i]][1] != wrangled_both_players$MapVote2[[i]][2]){
+    no_ties[nrow(no_ties)+1,]<- wrangled_both_players[i,]
+  }
+}
+
+#get count of wins for each map
+wins_df<-no_ties%>%
+  group_by(Choice)%>%
+  summarize(N= n())
+
+wins<- rep(NA, nrow(maps))
+for(i in 1:nrow(maps)){
+  wins[i] <-wins_df[i,2]
+}
+
+#Add Wins variable to maps df
+maps<-maps%>%
+  mutate(Wins = wins)
+```
+
+To finally calculate the proportion of times each map won, I can easily create a new column in the maps data frame called probWin which takes the values in the Wins column and divides them by the values in the Frequency column.
+
+```{r}
+#add column for proportion of wins for each map
+maps <- maps%>%
+  #proportion of wins = number of times map wins vote / number of times map appears
+  mutate(probWin = as.numeric(Wins)/as.numeric(Frequency))
+
+#Create Barplot showing probabilities of winning for each map
+ggplot(data = maps, mapping = aes(x = probWin, y = Name))+
+  geom_bar(color = "black", fill = "red", stat = 'identity')+
+  labs(x = "Probablity that Map Wins Vote",
+       y = "Maps",
+       title = "The Likeliness of Maps Winning the Vote When They are an Option")+
+  theme(axis.text.y = element_text(size = 6), title = element_text(size = 12))
+```
+
+From the calculations and visualization, it appears that the maps that are most likely to win the vote when they are an option are Standoff, Raid, Nuketown '84, Diesel, and Crossroads Strike.
+
+## Task 2
+
+For task 2 'Data Wrangling', I used ChatGPT 3.5. Here is the conversation I had with the Generative AI: 
+
+Here is the link to the ChatGPT conversation:
+<https://chat.openai.com/share/967bf318-9af9-49c1-9a32-f65ce2eb03c8>
+
+### Data Wrangling
+```{r}
+# Filter columns
+player1_filtered <- player1 %>% 
+  select(Map1, Map2, Choice, MapVote)
+
+player2_filtered <- player2 %>% 
+  select(Map1, Map2, Choice, MapVote)
+
+# Correct misspellings and remove extra blanks
+maps <- maps %>%
+  mutate(Name = str_trim(Name)) %>%
+  mutate(Name = recode(Name, 
+                        "Riad" = "Raid",
+                        "Ruah" = "Rush",
+                        "Collateral Striek" = "Collateral Strike",
+                        "yamantau" = "Yamantau",
+                        "Miami Sstrike" = "Miami Strike",
+                        "Drive-in" = "Drive-In"
+                        )) %>%
+  filter(!is.na(Name) & Name != "")
+
+# Remove rows with misspelled map names
+player1_filtered <- player1_filtered %>%
+  filter(Map1 %in% maps$Name & Map2 %in% maps$Name & Choice %in% maps$Name)
+
+player2_filtered <- player2_filtered %>%
+  filter(Map1 %in% maps$Name & Map2 %in% maps$Name & Choice %in% maps$Name)
+
+# Remove blank rows in MapVote column
+player1_filtered <- player1_filtered %>%
+  filter(!is.na(MapVote) & MapVote != "")
+player2_filtered <- player2_filtered %>%
+  filter(!is.na(MapVote) & MapVote != "")
+
+# Merge the filtered data frames
+merged_data <- bind_rows(player1_filtered, player2_filtered)
+```
+
+Our code and Chat GPT codes for our data wrangling section of the prompt have many similarities and differences. We both address different data quality issues within the datasets such as misspelled map names, extra (trailing) blanks, and removing rows containing NA values. We also focused on setting up the datasets so that it made accessing information easy when answering the prompt such as splitting ‘MapVote’ and filtering unnecessary columns in the player 1 and player 2 datasets. 
+Some differences in our code include our approach to making these edits. In our approach, we used many for loops and nested for loops each specific misspelling of Map names while ChatGPT used the tidyverse package, more specifically the ‘mutate’ and ‘filter’ functions, to correct the misspelled Map names. However, we both removed rows containing NA values as well as blank spaces in the same way (using tidyverse’s ‘filter’ function). 
+
+Although there is no clearly correct way to wrangle data, there are many strengths and weaknesses to our approach. Some of our strengths include having more control over each step of the process. In addition, our wrangling is catered very closely to the datasets we were given. For example, in both the player 1 and player 2 dataset, we were able to uniquely identify misspellings in each column containing Map names and address the columns specifically. Weaknesses in our approach to data wrangling is the lack of efficiency and concision, which could be more prone to errors and in totality, harder to debug.
+
+Strengths and weaknesses in Chat GPT’s data wrangling approach is almost opposite to ours. Strengths of Chat GPT is its efficiency and concision in code by using tidyverse functions which are easily readable. If errors in the code arise from Chat GPT not knowing the ins and outs of the dataset, the debugging process is still super straightforward with chunks of code being only 1-3 lines. Weaknesses in Chat GPT’s approach is the lack of specificity of errors related to this project’s specific datasets. The tidyverse functions may remove or edit rows of data that could have actually been handled differently.
+
+This leads to the major issue between our two different approaches of data wrangling. Our wrangled player 1 and player 2 datasets have different totals of rows than Chat GPT’s total rows (our method contains 486 observations for the player 1 and 188 observations for the player 2 dataset while Chat GPT’s method has 438 observations for player 1 and 184 observations for player 2 dataset). This could mean two different things: either our approach was very specific in being able to identify the exact type of cases that we wanted to clean or we missed a row of data that should have been removed or edited. Although Chat GPT deleted more cases than we did, the same issue occurs: Chat GPT might have removed cases we overlooked or Chat GPT deleted cases that could have just been edited and kept in the dataset.
+
+Overall, although both approaches successfully cleaned the datasets, Chat GPT’s approach is better as it is efficient by optimizing the functions within the tidyverse package, the code is concise and easy to read, and successfully achieves the task of cleaning up the datasets.
+
+
+### Problem Solving
+
+For task 2 'Problem Solving', I used ChatGPT 3.5. Here is the question I asked to the Generative AI: 
+
+player1_clean <- read.csv("CODGames_p1_380.csv") player2_clean <- read.csv("CODGames_p2_380.csv")
+maps <- read.csv("CODMaps.csv")
+player2_clean and player2_clean columns: Map1, Map2, Choice, MapVote. I want to edit MapVote so that the data within the column is split up. An example of how the data is within the column is "x to y" where x refers to the amount of votes for Map1 and y refers to the amount of votes for Map2. maps columns: Name, FirstAvailable, Date. Using library(tidyverse), Which maps are the most likely to win the map vote when they are an option? As part of your solution, you should calculate the proportion/probability that a map wins the vote given that it was a candidate. To do this, you will have to calculate the number times that each map was listed as a candidate ("Amerika","Apocalypse","Armada Strike","Cartel","Checkmate","Collateral Strike","Crossroads Strike","Deprogram","Diesel","Drive-In","Echelon","Express","Garrison","Hijacked","Jungle","Miami","Miami Strike","Moscow","Nuketown '84","Raid","Rush","Satellite","Slums","Standoff","The Pines","WMD","Yamantau","Zoo" from Map1 or Map2) and earned more votes than the other candidate. As part of this, you should consider whether a given map won the vote by getting more votes than the other option or was selected since it was `Map1` and the vote was a tie. You should also include a visualization of the results." Code used to wrangle data:" I then included the code used under the 'Data Wrangling' header.
+
+Here is another conversation I had with Chat GPT regarding handling votes that end with ties. 
+<https://chat.openai.com/share/c2cf2e84-84fb-410f-95bc-e75b24806109>
+
+This code was the answer to my question(s):
+
+```{r}
+# Split MapVote column if not separated already
+merged_data <- merged_data %>%
+  mutate(MapVote = if_else(str_detect(MapVote, " to "), MapVote, str_c(MapVote, " to 0")))
+
+# Split MapVote column into Map1_votes and Map2_votes
+merged_data <- merged_data %>%
+  separate(MapVote, into = c("Map1_votes", "Map2_votes"), sep = " to ")
+
+# Convert vote counts to numeric
+merged_data$Map1_votes <- as.numeric(merged_data$Map1_votes)
+merged_data$Map2_votes <- as.numeric(merged_data$Map2_votes)
+
+# Determine the winner for each row
+merged_data <- merged_data %>%
+  mutate(Winner = if_else(Map1_votes > Map2_votes, Map1, if_else(Map2_votes > Map1_votes, Map2, "Tie")))
+
+# Calculate the number of times each map was a candidate and won the vote
+map_counts <- merged_data %>%
+  group_by(Winner) %>%
+  summarise(count = n()) %>%
+  filter(Winner %in% maps$Name)
+
+# Calculate the proportion/probability that each map wins the vote given that it was a candidate
+map_counts <- map_counts %>%
+  mutate(probability = count / sum(count))
+
+# Visualize the results with tilted x-axis labels
+ggplot(map_counts, aes(x = Winner, y = probability)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Map", y = "Probability of Winning Vote", title = "Probability of Each Map Winning the Vote") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Our code and Chat GPT code for answering the research question “Which maps are the most likely to win the map vote when they are an option?” had many similarities and differences. We both effectively addressed the research question by not considering events of a tie vote, calculating the proportion/probability that a map wins the vote given that it was a candidate, and creating a barplot to visualize the outcome. 
+
+Some differences in our code included our approach. In our approach, we found frequencies of Map1, Map2 using ‘group_by’ and ‘summarize(count = n())’ functions then aggregating player1 and player2 after calculating the frequencies. In general, we mainly used for loops and base R while minimizing the use of tidyverse functions. Chat GPT’s approach aggregated the two tables first, then calculated the win frequencies using ‘separate’ and ‘mutate’ functions. Overall, we took more steps to achieve these goal: arranging the maps alphabetically, finding the map frequencies for player 1 and 2, replacing NA values in the map frequency dataset with 0, calculating the total frequency, removing tie cases, counting the number of wins for each map, removing NA values in the wins dataset with 0, calculating total wins, and finally calculating the probability of winning. Chat GPT condensed the number of steps to determine the winner based on the MapVote count, counting the number of MapVotes excluding tie cases for each map, and finally, dividing the number of wins by the total number of votes to find the probability of winning for each map. Generally, Chat GPT did less manual work such as dealing with missing values or looping through the data by effectively utilizing tidyverse functions. 
+  
+There are many strengths and weaknesses to our approach of answering the research question. A strength of our approach is having many steps, as smaller steps allow users to understand the breakdown of the process better with each step laid out clearly. Weaknesses of our code include the inefficiency of using for loops multiple times to remove NA values, for loops can be harder to read and can be more susceptible to errors, and creating multiple datasets increases memory usage. 
+  
+Strengths of Chat GPT’s approach are the usage of tidyverse functions that make the code easier to read and understand and tidyverse functions also prompt concision of code. Weaknesses of ChatGPT’s code is that using tidyverse functions make each step of the data manipulation process unclear, as most of the work is done behind the scenes. It requires users to be educated on the tidyverse library and the algorithms used to create these functions. 
+	
+Overall, although both approaches successfully answered the research question “Which maps are the most likely to win the map vote when they are an option?”, Chat GPT’s approach is better because it efficiently optimizes the functions within the tidyverse package and the code is concise and easy to read. However, for users more comfortable using base R, our approach is just as effective and easy to follow.
+
+## Task 3
+
+### Data Wrangling
+```{r}
+#Player 1
+#Changing the variable names to group them into 4 different GameTypes instead of 8
+#Create a copy
+player1_clean <-
+  player1 %>%
+  select(GameType, Score, TotalXP)
+
+#Change all the variable names
+new <- c("HC - Domination" = "Domination", "HC - Hardpoint" = "Hardpoint",  "HC - TDM" = "TDM", 
+         TDM = "TDM", Domination = "Domination", 
+         Hardpoint = "Hardpoint", 'HC - Kill Confirmed' = "Kill Confirmed",
+         'Kill Confirmed' = "Kill Confirmed")
+
+#Create a new column with cleaned data 
+player1_clean$GameType_clean <- as.character(new[player1_clean$GameType])
+
+#Player 2
+
+player2_clean <-
+  player2 %>%
+  select(GameType, Score, TotalXP)
+
+#Change all the variable names
+new <- c("HC - Domination" = "Domination", "HC - Hardpoint" = "Hardpoint",  "HC - TDM" = "TDM", 
+         TDM = "TDM", Domination = "Domination", 
+         Hardpoint = "Hardpoint", 'HC - Kill Confirmed' = "Kill Confirmed",
+         'Kill Confirmed' = "Kill Confirmed")
+
+#Create a new column with cleaned data 
+player2_clean$GameType_clean <- as.character(new[player2_clean$GameType])
+
+```
+
+
+### Merge the Tables
+```{r}
+#identify name of first table
+tab1 = player1_clean
+#identify name of second table
+tab2 = player2_clean
+#merge only the first 6 columns of first table that match columns in second
+COD <- rbind(tab1[,1:4], tab2)
+
+##Number of NAs
+sum(is.na(COD$Score))
+sum(is.na(COD$TotalXP))
+
+#Removing rows with NA values
+COD <- na.omit(COD)
+
+
+```
+
+### Shows the Distribution of GameTypes
+```{r}
+ggplot(data = COD, mapping = aes(x = GameType_clean,
+                                      fill = GameType_clean)) +
+  geom_bar()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))%>%
+  labs(x = "Game Type", 
+       y = "Count",
+       fill = "Game Type")
+```
+
+From this graph, there is a clear game type that both players frequently played. TDM was the most played game type between the two players while Domination was the least played within the different game types. 
+
+### Shows the Distribution of TotalXP
+```{r}
+ggplot(data = COD, 
+       mapping = aes(x = TotalXP)) +
+  geom_histogram(binwidth=600, color = "black", fill = "lightblue")+
+   labs(x = "Total Experience Points",
+       y = "Count")
+```
+
+There is a wide variety of Experience Points gained between the two players. The graph is more right skewed meaning there is most values will be below the mean. 
+
+
+### Shows the Distribution of Score
+```{r}
+ggplot(data = COD, 
+       mapping = aes(x = Score)) +
+  geom_histogram(binwidth= 500 , color = "black", fill = "lightblue")+
+   labs(x = "Score",
+       y = "Count")
+```
+
+There is also a wide range of scores for these two players. The most common score is around 2,500 between the players. 
+
+### Graph to Show the Relationship Between TotalXP and Score 
+```{r}
+ggplot(data = COD, 
+       mapping = aes(x = Score,
+                     y = TotalXP))+
+  geom_point(shape = 1)+
+  geom_smooth(method = lm, se = FALSE)+
+  labs(x = "Scores",
+       y = "Total Experience Points")
+```
+
+From this graph, there is no direct correlation between Score and the Total Experience points. There is a positive slope to the graph but not all the data points align with the line of best fit.
+
+### Graph to Show the Relationship Between TotalXP and GameType
+```{r}
+ggplot(data = COD, 
+       mapping = aes(x = GameType_clean, y = TotalXP)) +
+  geom_boxplot() +
+  labs(x = "Game Type", 
+       y = "Total Experience Points")
+
+```
+
+From the graph there a overall higher median of Total Experience points when playing the Domination Game Type compared to the others. When looking at the Kill Confirmed Game Type it has the lowest median but also the smallest range of total experience points. There is also other factors that could effect the graph like how often the players played certain game types, if they only played them a handful of times while others they played hundreds of times it doesn't show a correct representation of the relationship between Total Experience Points and the Game Type. 
+
+### Graph to Show the Relationship Between Score and GameType
+```{r}
+ggplot(data = COD, 
+       mapping = aes(x = GameType_clean, y = Score)) +
+  geom_boxplot() +
+  labs(x = "Game Type", 
+       y = "Score")
+```
+
+From this graph Domination has the highest median when it comes to measuring score, but Domination has the smallest range indicating that the score did not vary a lot. TDM was the most played Game Type between the two players, its median is about the same as the Hardpoint. There are other factors that could have impacted the score but overall Domination has the highest median even though it has a smaller range of scores. 
+
+
+### Shows the Relationship Between All 3 Variables 
+```{r}
+ggplot(data = COD,
+       mapping = aes(x = TotalXP,
+                     y = Score,
+                     color = GameType_clean))+
+  geom_point()+
+  labs(x = "Total Experience Points",
+       y = "Score",
+       color = "Game Type")
+
+```
+
+This graph is comparing the Total Experience Points, Score, and GameType. From this graph, there is a clear game type that is played the most between the players which is TDM. There is not a direct correlation when it comes to the relationship between Total Experience Points, Score, and Game Type. There is a positive relationship between Score and Total Experience points, but the Game Type does not have an overall impact on the way the game goes, score and experience points wise. 
+
+### Model to Show the Relationship Between Total Experience Types, Score, and GameType.
+
+#### Research Question: How does the Game Type affect TotalXP after accounting for the Score?
+
+#### Linear Regression Model
+```{r}
+#Create Indicator Variables
+COD <- 
+  COD %>%
+  mutate(Domination = ifelse(GameType_clean == "Domination", 1, 0),
+         Hardpoint = ifelse(GameType_clean == "Hardpoint", 1, 0),
+         Kill_Confirmed = ifelse(GameType_clean == "Kill Confirmed", 1, 0),
+         TDM = ifelse(GameType_clean == "TDM", 1, 0))
+
+model1 <- lm(TotalXP ~ Score + Domination + Hardpoint + Kill_Confirmed + TDM, data = COD)
+summary(model1)
+
+```
+
+Analysis of the Linear Regression Model:
+
+The average total experience points is 6502.15 for a game when the score of the game types is 0. 
+
+Score: As the score increases by 1 point, we expect the total experience points to increase by 2.71 points, on average, assuming the the Game Type does not change. 
+
+Domination: As we go from Score to Domination, we expect the total experience points to increase by 2570.44 points, on average, assuming the score does not change.
+
+Hardpoint: As we go from Domination to Hardpoint, we expect the total experience points to increase by 2692.20 points, on average, assuming the score does not change. 
+
+Killed_Confirmed: As we go from Hardpoint to Kill_Confirmed, we expect the total experience points to decrease by 1132.74 points, on average, assuming the score does not change. 
+
+TDM: There was too many indicators so R dropped TDM.
+
+Overall, the adjusted R squared for this model is 0.3344, which means that the game type did not have a big influence on the total experience points after accounting for the score. We would want a bigger value because that means that the game type would have a bigger influence on the total experience points.
+
+
+## Task 4
+
+### Research Question: Which model, Random Forest, kNN Classification, or Naive Bayes, is the best at predicting whether a player completed a full game or not based on the number of eliminations they have, the number of deaths, the amount of damage they accumulate, their score, and their total experience points?
+
+### Data Wrangling/Preparing Data
+
+To begin exploring this question, I wanted to remove any rows with missing values for the response and predictor variables. Across all three models, I wanted to keep the predictor variables the same. So, as stated in the research question, the predictors would be Eliminations, Score, Damage, TotalXP, and Deaths. In turn, the response variable would be FullPartial. Additionally, I needed to create the training and validation split. I decided to to an 80/20 split and performed it with the seed(123).
+```{r}
+#Filter out rows with missing values for FullPartial, Eliminations, Score, Damage, TotalXP and Deaths
+no_missing_vals_<- both_players%>%
+  select(FullPartial, Eliminations, Score, Damage, TotalXP, Deaths)%>% 
+  filter(!(FullPartial == "" ))%>%
+  na.omit()
+
+#Perform an 80/20 training/validation split
+set.seed(123)
+trainInd <- sample(1:nrow(no_missing_vals_), floor(0.8 * nrow(no_missing_vals_)))
+set.seed(NULL)
+
+Train <- no_missing_vals_[trainInd, ]
+Validation <- no_missing_vals_[-trainInd, ]
+```
+
+### Random Forest Model
+
+The random forest model builds off of the decision tree model and uses multiple decision trees to predict a class. It is considered a method for bagging trees. The variable ntree not only represents represents the number of trees that will be used in the model, but also the number of bootstrap samples. This means that the Random Forest model creates a decision tree for each bootstrap sample. 
+
+In this case, I decided to use 500 trees/bootstrapping samples to predict whether a match was full or partial. For some reason, the model kept outputting an error saying that there were NA values in the response variable (FullPartial). However, I didn't run into this issue with the other two models and as you can see from the is.na() calculation, there are no NA values for that variable. In order to resolve this issue, I found online that there is a parameter for the random forest model called na.action. If you set it equal to na.roughfix, the error disappears. After implementing the model, I created predictions from the validation set, created a confusion matrix to show how many cases were classified correctly, and calculated the accuracy of the model.
+```{r}
+sum(is.na(no_missing_vals_$FullPartial))
+
+rfModel <- randomForest(as.factor(FullPartial)~Eliminations + Score + Damage + TotalXP + Deaths,
+                        data = Train,
+                        ntree = 500,
+                        mtry = 3, 
+                        na.action = na.roughfix)
+
+predFull <- predict(rfModel, newdata = Validation, type = "response")
+  
+#Create confusion matrix
+table(predFull, Validation$FullPartial)
+
+#Calculate accuracy
+mean(predFull == Validation$FullPartial)
+```
+
+### kNN Model
+
+The k-Nearest Neighbor (kNN) classification model uses distance metrics to determine the k (any positive integer) nearest neighbors of a point. The majority class of the k-nearest neighbors decides the class of the unknown data point. In the case of a tie, it is broken randomly.
+
+Since I was unsure of an appropriate k-value for my model, I decided to evaluate the accuracy of kNN classification models with k values ranging from 1-75. The k value with the highest accuracy would then be implemented into the model. To do this, I used a for loop, implemented the knn classification model at each k value, and calculated the models accuracy. I stored these accuracies in a vector and plotted them as a function of k to see which k value produced the model with the highest accuracy.
+```{r}
+xvars <- c("Eliminations", "Score", "Damage", "TotalXP" , "Deaths")
+
+#Loop for picking k
+maxK <- 75
+accuracyVec <- rep(NA, maxK) # create a vector with accuracies for each k vals
+
+#Loop
+for(i in 1: maxK){
+  #Build KNN model
+  knnRes <- knn(train = Train[, xvars, drop = FALSE],
+                    test = Validation[, xvars, drop = FALSE],
+                    cl = Train$FullPartial,
+                    k = i)
+  pred_full <- knnRes
+  #Calculate and store mse
+  accuracyVec[i] <- mean(pred_full == Validation$FullPartial)
+}
+
+#Create a temp data frame for plotting in ggplot
+tempDF <- data.frame(k= 1:maxK, accuracy = accuracyVec)
+
+#Create plot showing accuracy as a fn of k
+ggplot(data = tempDF, mapping = aes(x = k, y = accuracy)) + 
+  geom_line()+
+  labs( x = "Number of Nearest Neighbors (k)",
+        y = "Accuracy") +
+  geom_point(data =  tempDF[which.max(accuracyVec),], color = "red", size = 3, shape = 1)
+
+tempDF[which.max(accuracyVec),]
+```
+
+This code chunk implements the kNN model with the highest accuracy (k=9). I once again created a confusion matrix to help visualize the predictions made by the model compared to the actual classification. The accuracy had already been calculate for this model, so I didn't need to repeat that step.
+```{r}
+knn_res <- knn(train = Train[, xvars, drop = FALSE],
+                    test = Validation[, xvars, drop = FALSE],
+                    cl = Train$FullPartial,
+                    k = tempDF[which.max(accuracyVec),"k"])
+
+table(knn_res, Validation$FullPartial)
+```
+
+### Naive Bayes Model
+
+The Naive Bayes Classification model is based on Bayes Theorem and assumes that the predictors are independent from one another. In other words, this model presumes that the presence of an attribute for a class is unrelated to the presence of any other attribute. This machine learning method is known to outperform other supervised learning techniques.
+
+This model was fairly simple to implement. I just had to input the predictor variables and the response variable in the same form as was done for the random forest model. Otherwise, through the tutorial I found on the model, they suggested to include the parameter `usekernel = T` if it produced a higher accuracy. In this case, it did, so I included it. Once again, I calculated the accuracy of the model and created a confusion matrix.
+```{r, warning=FALSE}
+#Create model
+model <- naive_bayes(as.factor(FullPartial)~Eliminations + Score + Damage + TotalXP + Deaths, data = Train, usekernel = T) 
+
+#Use model to make predictions on validation data
+p <- predict(model, Validation)
+
+#Confusion Matrix
+table(p, Validation$FullPartial)
+
+#Calculate Accuracy
+mean(Validation$FullPartial == p)
+```
+
+Based on the accuracies of the three models, the naive bayes model was the best at predicting whether a match was full or partial with an accuracy of about 94%. The second best performing model was the random forest model with about a 92% accuracy. The worst performing model was the kNN classification model which had an accuracy of about 91%. I found these results interesting since I was able to implement the kNN classification model at the optimal k value, yet it still performed the worse out of all three models. However, it still performed at a high accuracy along with the other two models.
